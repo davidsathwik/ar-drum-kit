@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AR Drum Kit</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+
+  <button id="mode-btn" type="button">✎ Edit kit</button>
+
+  <div id="no-hands" class="banner">
+    🖐 No hands detected — face the camera, raise your hands, and check your lighting.
+  </div>
+  <div id="empty-hint" class="banner">
+    Your kit is empty — click <strong>✎ Edit kit</strong> above to add some drums.
+  </div>
+
+  <div id="start-overlay" class="overlay">
+    <div class="overlay-card">
+      <h1>🥁 AR Drum Kit</h1>
+      <p>Stand in front of your webcam and drum in the air with your index fingers.
+         Faster strikes play louder. Spacebar plays the kick.</p>
+      <p>In <strong>Edit mode</strong>, pinch (thumb + index) to grab pads: move them,
+         resize with both hands, drag new instruments in from the tray, or drag a
+         pad onto the delete button.</p>
+      <button id="start-btn" type="button">Start drumming</button>
+      <p id="start-status" class="status"></p>
+    </div>
+  </div>
+
+  <div id="error-overlay" class="overlay hidden">
+    <div class="overlay-card error">
+      <h1>⚠️ Can't start</h1>
+      <p id="error-text"></p>
+      <button type="button" onclick="location.reload()">Reload</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
