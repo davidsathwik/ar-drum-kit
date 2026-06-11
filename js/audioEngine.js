@@ -3,6 +3,26 @@
 // time. Velocity maps to gain; each hit gets slight random pitch and lowpass
 // variation so rolls don't sound robotic.
 
+// A data-URI WAV of pure silence (0.5s, 8kHz mono). Looping it through an
+// <audio> element promotes the page's iOS audio session from "ambient" to
+// "playback" — without this, iPhones with the ringer switch on silent mute
+// ALL Web Audio output even though the page looks perfectly healthy.
+function silentWavDataUri() {
+  const sampleRate = 8000;
+  const samples = sampleRate / 2;
+  const bytes = new Uint8Array(44 + samples * 2);
+  const dv = new DataView(bytes.buffer);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) bytes[off + i] = s.charCodeAt(i); };
+  str(0, 'RIFF'); dv.setUint32(4, 36 + samples * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+  dv.setUint16(22, 1, true); dv.setUint32(24, sampleRate, true);
+  dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true);
+  dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, samples * 2, true);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return 'data:audio/wav;base64,' + btoa(bin);
+}
+
 export class AudioEngine {
   constructor({ manifest, config }) {
     this.manifest = manifest;
@@ -10,6 +30,7 @@ export class AudioEngine {
     this.ctx = null;
     this.buffers = new Map(); // `${instrument}/${variation}` -> AudioBuffer
     this.master = null;
+    this._sessionEl = null;
   }
 
   /**
@@ -32,6 +53,28 @@ export class AudioEngine {
     tick.buffer = this.ctx.createBuffer(1, 1, 22050);
     tick.connect(this.ctx.destination);
     tick.start(0);
+
+    // iOS ringer-switch workaround: keep a silent <audio> loop playing so
+    // the audio session is "playback" (not muted by the silent switch).
+    if (!this._sessionEl && typeof document !== 'undefined') {
+      const el = document.createElement('audio');
+      el.src = silentWavDataUri();
+      el.loop = true;
+      el.setAttribute('playsinline', '');
+      document.body.appendChild(el);
+      this._sessionEl = el;
+    }
+    if (this._sessionEl) this._sessionEl.play().catch(() => {});
+  }
+
+  /** Re-assert audio after iOS suspends it (tab switch, screen lock, etc.).
+   *  Safe to call from any user gesture or visibility change. */
+  keepAlive() {
+    if (!this.ctx) return;
+    if (this.ctx.state !== 'running') this.ctx.resume();
+    if (this._sessionEl && this._sessionEl.paused) {
+      this._sessionEl.play().catch(() => {});
+    }
   }
 
   /** Fetch and decode every sample. Call once at startup, after unlock(). */

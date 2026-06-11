@@ -158,6 +158,12 @@ async function start() {
 
 startBtn.addEventListener('click', start);
 window.addEventListener('resize', () => { if (running) renderer.layout(); });
+// iOS quietly suspends audio on tab switches / screen locks; revive it on
+// any interaction or return to the page.
+window.addEventListener('pointerdown', () => audio.keepAlive(), { capture: true });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) audio.keepAlive();
+});
 // Spacebar is the kick pedal — don't let it scroll or re-click focused buttons.
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') e.preventDefault();
