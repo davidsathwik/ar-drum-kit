@@ -64,8 +64,9 @@ export class Renderer {
     ctx.clearRect(0, 0, this.w, this.h);
 
     for (const pad of pads) {
-      const held = editState && (editState.heldPadIds.includes(pad.id));
-      this._drawPad(pad, { held, editMode: mode === 'edit' });
+      const held = editState && editState.heldPadId === pad.id;
+      const hovered = editState && editState.hoverPadId === pad.id;
+      this._drawPad(pad, { held, hovered, editMode: mode === 'edit' });
     }
 
     this._drawFlashes(now);
@@ -73,17 +74,17 @@ export class Renderer {
     if (mode === 'edit' && editState) this._drawEditChrome(editState);
 
     if (strikers) {
-      for (const s of strikers) this._drawFingertip(s, mode);
+      for (const s of strikers) this._drawFingertip(s);
     }
   }
 
-  _drawPad(pad, { held, editMode, ghost } = {}) {
+  _drawPad(pad, { held, hovered, editMode, ghost } = {}) {
     const ctx = this.ctx;
     const cx = this._px(pad.x), cy = this._py(pad.y), r = this._pr(pad.r);
     const def = this.manifest[pad.instrument];
     const style = def?.style ?? 'drum';
     const hue = HUES[pad.instrument] ?? 0;
-    const alpha = ghost ? 0.25 : held ? 0.55 : 0.35;
+    const alpha = ghost ? 0.25 : held ? 0.55 : hovered ? 0.45 : 0.35;
 
     ctx.save();
     const grad = ctx.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
@@ -102,8 +103,8 @@ export class Renderer {
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.lineWidth = held ? 4 : 2.5;
-    ctx.strokeStyle = `hsla(${hue}, 90%, ${held ? 80 : 70}%, 0.85)`;
+    ctx.lineWidth = held || hovered ? 4 : 2.5;
+    ctx.strokeStyle = `hsla(${hue}, 90%, ${held || hovered ? 80 : 70}%, 0.85)`;
     ctx.stroke();
 
     if (style === 'cymbal') {
@@ -138,6 +139,11 @@ export class Renderer {
       ctx.fillStyle = 'rgba(255,255,255,0.65)';
       ctx.fillText(pad.variation, cx, cy + r * 0.32);
     }
+    if (hovered && !ghost) {
+      ctx.font = `400 ${Math.max(9, r * 0.16)}px system-ui, sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillText('drag to move · scroll to resize', cx, cy + r * 0.55);
+    }
     ctx.restore();
   }
 
@@ -167,7 +173,7 @@ export class Renderer {
     }
   }
 
-  _drawFingertip(s, mode) {
+  _drawFingertip(s) {
     const ctx = this.ctx;
     const color = s.id.startsWith('left') ? '#27e0ff' : '#ff5ad1';
     const x = this._px(s.x), y = this._py(s.y);
@@ -181,16 +187,6 @@ export class Renderer {
     ctx.lineWidth = 3;
     ctx.strokeStyle = color;
     ctx.stroke();
-
-    if (mode === 'edit') {
-      // pinch point indicator
-      const px = this._px(s.pinchX), py = this._py(s.pinchY);
-      ctx.beginPath();
-      ctx.arc(px, py, s.isPinching ? 10 : 5, 0, Math.PI * 2);
-      ctx.fillStyle = s.isPinching ? color : 'rgba(255,255,255,0.4)';
-      ctx.globalAlpha = 0.8;
-      ctx.fill();
-    }
     ctx.restore();
   }
 

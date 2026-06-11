@@ -1,5 +1,6 @@
 // App shell: wires the modules together, owns the Play/Edit mode toggle,
 // the start/permission flow, and the error/empty/no-hands states.
+// Playing is hands-in-the-air; editing is plain mouse.
 
 import { config } from './config.js';
 import { manifest } from './manifest.js';
@@ -30,7 +31,7 @@ let latestStrikers = [];
 const kitStore = new KitStore({ storage: window.localStorage, config });
 const audio = new AudioEngine({ manifest, config });
 const renderer = new Renderer({ canvas, video, manifest });
-const editController = new EditController({ kitStore, manifest });
+const editController = new EditController({ kitStore, manifest, config });
 
 const engine = new TriggerEngine({
   config,
@@ -54,10 +55,6 @@ const tracker = new HandTracker({
       engine.update(strikers, kitStore.getPads(), tracker.aspect);
     }
   },
-  onPinchStart(hand, x, y) { if (mode === 'edit') editController.pinchStart(hand, x, y); },
-  onPinchMove(hand, x, y) { if (mode === 'edit') editController.pinchMove(hand, x, y); },
-  onPinchEnd(hand, x, y) { if (mode === 'edit') editController.pinchEnd(hand, x, y); },
-  onHandLost(hand) { editController.handLost(hand); },
 });
 
 function setMode(next) {
@@ -74,9 +71,43 @@ function setMode(next) {
 
 modeBtn.addEventListener('click', () => setMode(mode === 'edit' ? 'play' : 'edit'));
 
+// --- Edit-mode mouse wiring (normalized canvas coordinates) ---
+
+function toNorm(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) / rect.width,
+    y: (e.clientY - rect.top) / rect.height,
+  };
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (mode !== 'edit' || e.button !== 0) return;
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+  const { x, y } = toNorm(e);
+  editController.mouseDown(x, y);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (mode !== 'edit') return;
+  const { x, y } = toNorm(e);
+  editController.mouseMove(x, y);
+});
+canvas.addEventListener('pointerup', (e) => {
+  if (mode !== 'edit' || e.button !== 0) return;
+  const { x, y } = toNorm(e);
+  editController.mouseUp(x, y);
+});
+canvas.addEventListener('wheel', (e) => {
+  if (mode !== 'edit') return;
+  e.preventDefault();
+  const { x, y } = toNorm(e);
+  editController.wheel(x, y, e.deltaY);
+}, { passive: false });
+
+// --- Render loop (tracking runs on camera frames inside HandTracker) ---
+
 function frame(now) {
   if (!running) return;
-  tracker.poll(now);
   editController.setAspect(tracker.aspect);
 
   noHandsEl.classList.toggle('visible',
@@ -107,6 +138,7 @@ async function start() {
     if (!new URLSearchParams(location.search).has('nocam')) {
       startStatus.textContent = 'Starting camera & hand tracking…';
       await tracker.init();
+      tracker.start();
     }
 
     startOverlay.classList.add('hidden');

@@ -24,19 +24,20 @@ load from CDN, so the first launch needs internet.
 - Strike any pad with your **index fingertip** — entry from any direction
   counts; speed controls loudness. Slow, gentle movements through a pad don't
   trigger it, so you can reposition between phrases silently.
+- One strike fires one pad — the pad where the strike lands, not the pads it
+  passes over on the way.
 - A pad re-arms only after your fingertip leaves it (no machine-gunning).
 - Both hands work independently. **Spacebar** = kick drum.
 
 ## Editing your kit
 
-Click **✎ Edit kit** (sounds are muted while editing). All editing is done by
-**pinching** — thumb and index tip together:
+Click **✎ Edit kit** (sounds are muted while editing). Editing uses the mouse:
 
-- Pinch an instrument in the left dropdown to open its sample variations.
-- Pinch a variation and drag it onto the canvas to create a new pad.
-- Pinch an existing pad to move it.
-- Pinch the same pad with **both hands** and spread/close them to resize.
-- While holding a pad, the **Delete** button (top right) arms — drag the pad
+- Click an instrument in the left dropdown to open its sample variations.
+- Drag a variation onto the canvas to create a new pad where you release.
+- Drag an existing pad to move it.
+- Scroll the mouse wheel over a pad to resize it.
+- While dragging a pad, the **Delete** button (top right) arms — drop the pad
   onto it to remove it.
 - Multiple pads of the same instrument are fine (two crashes, etc.).
 

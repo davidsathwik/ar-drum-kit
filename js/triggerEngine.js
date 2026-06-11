@@ -1,17 +1,21 @@
 // TriggerEngine: pure hit-detection logic. No DOM, no audio, no MediaPipe.
 //
-// Hit model (the product's core feel — see PRD):
+// Hit model (reworked for accuracy):
 //  - A pad fires the moment a striker ENTERS it from any direction, if the
-//    entry speed is at or above the threshold. No deceleration analysis, no
-//    drive-by suppression: zero added decision latency.
+//    entry speed is at or above the threshold. No deceleration analysis:
+//    zero added decision latency.
+//  - One strike fires exactly ONE pad — the pad where the strike LANDS.
+//    Among pads entered this frame, that's the one containing the striker's
+//    endpoint (nearest center wins on overlap); pads the inter-frame segment
+//    merely passed over on the way are not fired (no drive-by mis-hits).
+//    If the endpoint is inside no pad (a full pass-through between two
+//    samples at low fps), the crossed pad nearest the endpoint fires, so
+//    fast strikes still register on slow cameras.
 //  - After any entry (sounding or silent), the pad is disarmed for that
-//    striker until the striker exits. Resting a hand inside a pad never
-//    machine-guns.
-//  - Each striker arms/fires each pad independently; overlapping pads can
-//    both fire from one motion.
-//  - Between-frame interpolation: if the segment from the previous sample to
-//    the current one crosses a pad the striker wasn't inside, that counts as
-//    an entry — fast strikes register even at low camera framerates.
+//    striker until the striker exits. Exit requires leaving radius *
+//    exitHysteresis, so edge jitter can't re-arm and double-fire. Resting a
+//    hand inside a pad never machine-guns.
+//  - Each striker arms/fires pads independently of the other.
 //
 // Coordinates: x, y in [0,1] (y down). Distances and speeds are computed in
 // aspect-corrected space (x scaled by frame aspect) so hit circles match what
@@ -82,40 +86,46 @@ export class TriggerEngine {
       const prev = this._prevPos.get(s.id);
       const speed = Math.hypot(s.vx * aspect, s.vy);
 
+      // Collect every pad this striker entered or crossed this frame.
+      const candidates = [];
       for (const pad of pads) {
         const key = s.id + ':' + pad.id;
         const cx = pad.x * aspect, cy = pad.y;
-        const wasInside = this._inside.get(key) === true;
-        const nowInside = Math.hypot(ax - cx, ay - cy) <= pad.r;
+        const dist = Math.hypot(ax - cx, ay - cy);
 
-        if (wasInside) {
-          if (!nowInside) this._inside.delete(key); // exit -> re-arm
+        if (this._inside.get(key) === true) {
+          // Exit needs clearance beyond the rim so edge jitter can't re-arm.
+          if (dist > pad.r * this.config.exitHysteresis) this._inside.delete(key);
           continue;
         }
 
-        // Striker was outside. Entry = endpoint inside, or the inter-frame
-        // segment clipped the pad (fast pass-through between samples).
+        const nowInside = dist <= pad.r;
         const crossed = prev
           ? segmentIntersectsCircle(prev.x, prev.y, ax, ay, cx, cy, pad.r)
           : nowInside;
         if (!crossed) continue;
 
-        // First-ever sample inside a pad (tracking just (re)acquired): no
-        // entry speed is knowable — disarm silently.
-        const velocity = prev ? velocityForSpeed(speed, this.config) : 0;
-        if (velocity > 0 && !this.muted) {
-          this.onHit({
-            padId: pad.id,
-            instrument: pad.instrument,
-            variation: pad.variation,
-            velocity,
-            x: pad.x,
-            y: pad.y,
-          });
-        }
+        // Every entered pad disarms until exit, fired or not (silent slow
+        // entries included). Pass-through pads already exited: stay armed.
         if (nowInside) this._inside.set(key, true);
-        // Pass-through (endpoint outside): entered and exited within one
-        // frame -> already re-armed.
+        candidates.push({ pad, nowInside, dist });
+      }
+
+      // Fire the single pad where the strike landed. First-ever sample
+      // (tracking just acquired) has no knowable entry speed: stay silent.
+      const velocity = prev ? velocityForSpeed(speed, this.config) : 0;
+      if (candidates.length > 0 && velocity > 0 && !this.muted) {
+        const landed = candidates.filter((c) => c.nowInside);
+        const pool = landed.length > 0 ? landed : candidates;
+        const best = pool.reduce((a, b) => (b.dist < a.dist ? b : a));
+        this.onHit({
+          padId: best.pad.id,
+          instrument: best.pad.instrument,
+          variation: best.pad.variation,
+          velocity,
+          x: best.pad.x,
+          y: best.pad.y,
+        });
       }
 
       this._prevPos.set(s.id, { x: ax, y: ay });

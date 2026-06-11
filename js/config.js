@@ -7,21 +7,28 @@ export const config = {
   // Minimum entry speed (aspect-corrected normalized units / second) for a
   // strike to trigger. Slow drifts through a pad stay silent. If a machine
   // tracks well below 30fps and fast strikes are missed, lower this.
-  strikeSpeedMin: 0.9,
+  strikeSpeedMin: 0.7,
   // Entry speed mapped to full velocity (1.0). Between min and max, velocity
   // scales linearly.
-  strikeSpeedMax: 4.5,
+  strikeSpeedMax: 4.0,
   // Loudness floor for the softest triggering hit, so threshold hits are audible.
   velocityFloor: 0.25,
+  // A striker counts as "exited" (re-armed) only beyond radius * this factor,
+  // so jitter at the pad edge can't re-arm and double-fire.
+  exitHysteresis: 1.15,
 
-  // --- Pinch detection (thumb tip to index tip distance, with hysteresis) ---
-  pinchOnDistance: 0.055,
-  pinchOffDistance: 0.085,
+  // --- Tracking filter (One Euro: smooth at rest, responsive in motion) ---
+  oneEuroMinCutoff: 1.2,  // Hz; lower = smoother when still
+  oneEuroBeta: 0.7,       // higher = less lag during fast strikes
+  oneEuroDCutoff: 1.0,    // derivative smoothing cutoff
+  // Hit-test (and display) position is extrapolated forward along the
+  // velocity by this much, compensating camera + inference latency.
+  latencyCompMs: 35,
 
-  // --- Tracking smoothing ---
-  // EMA weight of the newest sample. High = responsive, low = smooth.
-  positionAlpha: 0.7,
-  velocityAlpha: 0.5,
+  // --- MediaPipe confidence thresholds ---
+  minHandDetectionConfidence: 0.6,
+  minHandPresenceConfidence: 0.6,
+  minTrackingConfidence: 0.6,
 
   // --- Audio humanization ---
   pitchJitter: 0.04,       // +/- playbackRate variation per hit
@@ -30,6 +37,9 @@ export const config = {
 
   // --- Keyboard trigger ---
   keyboardKickVelocity: 0.85,
+
+  // --- Edit mode (mouse) ---
+  wheelResizeFactor: 1.08, // radius scale per scroll notch
 
   // --- UI ---
   noHandsWarningAfterMs: 2500,

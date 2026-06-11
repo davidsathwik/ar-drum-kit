@@ -19,6 +19,7 @@ html, body {
 #overlay {
   position: absolute;
 }
+body.edit-mode #overlay { cursor: crosshair; }
 
 #mode-btn {
   position: absolute;

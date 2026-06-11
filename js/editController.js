@@ -1,13 +1,14 @@
-// EditController: the Edit-mode gesture state machine. Pure logic — consumes
-// pinch events (from HandTracker in the app, synthetic streams in tests) and
-// mutates KitStore. The renderer draws from getState() + editLayout geometry.
+// EditController: the Edit-mode interaction state machine, driven by the
+// mouse. Pure logic — consumes normalized mouse events (from the canvas in
+// the app, synthetic streams in tests) and mutates KitStore. The renderer
+// draws from getState() + editLayout geometry.
 //
-// Gestures:
-//  - Pinch a dropdown instrument  -> open its variations tray
-//  - Pinch a tray variation, drag onto the canvas, release -> new pad there
-//  - Pinch an existing pad, drag  -> move (drops in place on release)
-//  - Second hand pinches the held pad -> spread/close both hands to resize
-//  - While a pad is held, the delete button arms; release over it -> delete
+// Interactions:
+//  - Click a dropdown instrument        -> open (or toggle) its variations tray
+//  - Drag a tray variation onto canvas  -> new pad where released
+//  - Drag an existing pad               -> move (drops in place on release)
+//  - Scroll wheel over a pad            -> resize it
+//  - While a pad is dragged, the delete button arms; release over it -> delete
 
 import {
   dropdownItems, trayItems, pointInRect, pointInPad,
@@ -19,24 +20,21 @@ export class EditController {
    * @param {object} opts
    * @param {import('./kitStore.js').KitStore} opts.kitStore
    * @param {object} opts.manifest - instrument -> { variations: [{id}] }
+   * @param {object} opts.config - wheelResizeFactor
    * @param {number} [opts.aspect]
    */
-  constructor({ kitStore, manifest, aspect = 16 / 9 }) {
+  constructor({ kitStore, manifest, config, aspect = 16 / 9 }) {
     this.kitStore = kitStore;
     this.manifest = manifest;
+    this.config = config;
     this.aspect = aspect;
-    this.selectedInstrument = null;       // tray open for this instrument
-    this.dragNew = null;                  // { hand, instrument, variation, x, y }
-    this.holds = new Map();               // hand -> { padId, offX, offY }
-    this.resize = null;                   // { padId, hands: [a, b], startDist, startR }
-    this.lastPos = new Map();             // hand -> { x, y } latest pinch point
+    this.selectedInstrument = null;  // tray open for this instrument
+    this.dragNew = null;             // { instrument, variation, x, y }
+    this.hold = null;                // { padId, offX, offY }
+    this.cursor = { x: -1, y: -1 };
   }
 
   setAspect(aspect) { this.aspect = aspect; }
-
-  _dist(a, b) {
-    return Math.hypot((a.x - b.x) * this.aspect, a.y - b.y);
-  }
 
   _padAt(x, y) {
     const pads = this.kitStore.getPads();
@@ -46,41 +44,25 @@ export class EditController {
     return null;
   }
 
-  pinchStart(hand, x, y) {
-    this.lastPos.set(hand, { x, y });
+  mouseDown(x, y) {
+    this.cursor = { x, y };
 
-    // Second hand pinching a pad the other hand already holds -> resize.
-    for (const [otherHand, hold] of this.holds) {
-      if (otherHand === hand) continue;
-      const pad = this.kitStore.getPad(hold.padId);
-      if (pad && pointInPad(x, y, pad, this.aspect)) {
-        const a = this.lastPos.get(otherHand);
-        const startDist = this._dist(a, { x, y });
-        if (startDist > 0) {
-          this.holds.delete(otherHand);
-          this.resize = {
-            padId: pad.id, hands: [otherHand, hand], startDist, startR: pad.r,
-          };
-          return;
-        }
-      }
-    }
-
-    // Dropdown: pinch an instrument to open its variations tray.
+    // Dropdown: click an instrument to open (or toggle closed) its tray.
     for (const item of dropdownItems(Object.keys(this.manifest))) {
       if (pointInRect(x, y, item.rect)) {
-        this.selectedInstrument = item.instrument;
+        this.selectedInstrument =
+          this.selectedInstrument === item.instrument ? null : item.instrument;
         return;
       }
     }
 
-    // Tray: pinch a variation to start dragging a new pad out.
+    // Tray: press a variation to start dragging a new pad out.
     if (this.selectedInstrument) {
       const variations = this.manifest[this.selectedInstrument].variations.map((v) => v.id);
       for (const item of trayItems(variations)) {
         if (pointInRect(x, y, item.rect)) {
           this.dragNew = {
-            hand, instrument: this.selectedInstrument, variation: item.variation, x, y,
+            instrument: this.selectedInstrument, variation: item.variation, x, y,
           };
           return;
         }
@@ -90,64 +72,34 @@ export class EditController {
     // Existing pad: grab it (keep the grab offset so the pad doesn't jump).
     const pad = this._padAt(x, y);
     if (pad) {
-      this.holds.set(hand, { padId: pad.id, offX: pad.x - x, offY: pad.y - y });
+      this.hold = { padId: pad.id, offX: pad.x - x, offY: pad.y - y };
     }
   }
 
-  pinchMove(hand, x, y) {
-    this.lastPos.set(hand, { x, y });
-
-    if (this.resize && this.resize.hands.includes(hand)) {
-      const [a, b] = this.resize.hands;
-      const pa = this.lastPos.get(a), pb = this.lastPos.get(b);
-      if (pa && pb) {
-        const d = this._dist(pa, pb);
-        this.kitStore.resizePad(this.resize.padId,
-          this.resize.startR * (d / this.resize.startDist));
-      }
-      return;
-    }
-
-    const hold = this.holds.get(hand);
-    if (hold) {
-      this.kitStore.movePad(hold.padId, x + hold.offX, y + hold.offY);
-      return;
-    }
-
-    if (this.dragNew && this.dragNew.hand === hand) {
+  mouseMove(x, y) {
+    this.cursor = { x, y };
+    if (this.hold) {
+      this.kitStore.movePad(this.hold.padId, x + this.hold.offX, y + this.hold.offY);
+    } else if (this.dragNew) {
       this.dragNew.x = x;
       this.dragNew.y = y;
     }
   }
 
-  pinchEnd(hand, x, y) {
-    this.lastPos.set(hand, { x, y });
+  mouseUp(x, y) {
+    this.cursor = { x, y };
 
-    if (this.resize && this.resize.hands.includes(hand)) {
-      // The remaining hand keeps holding the pad.
-      const remaining = this.resize.hands.find((h) => h !== hand);
-      const pad = this.kitStore.getPad(this.resize.padId);
-      const pos = this.lastPos.get(remaining);
-      if (pad && pos) {
-        this.holds.set(remaining, {
-          padId: pad.id, offX: pad.x - pos.x, offY: pad.y - pos.y,
-        });
-      }
-      this.resize = null;
-      return;
-    }
-
-    const hold = this.holds.get(hand);
-    if (hold) {
-      this.holds.delete(hand);
+    if (this.hold) {
+      const { padId } = this.hold;
+      this.hold = null;
       if (pointInRect(x, y, DELETE_BUTTON)) {
-        this.kitStore.removePad(hold.padId);
+        this.kitStore.removePad(padId);
       }
       // Otherwise the pad simply stays where the live moves left it.
       return;
     }
 
-    if (this.dragNew && this.dragNew.hand === hand) {
+    if (this.dragNew) {
       const { instrument, variation } = this.dragNew;
       this.dragNew = null;
       // Releasing back over the chrome cancels; anywhere else creates.
@@ -161,51 +113,34 @@ export class EditController {
     }
   }
 
-  /** Abandon all in-flight gestures (e.g. a pinching hand left the frame). */
-  handLost(hand) {
-    if (this.resize && this.resize.hands.includes(hand)) {
-      const remaining = this.resize.hands.find((h) => h !== hand);
-      const pad = this.kitStore.getPad(this.resize.padId);
-      const pos = this.lastPos.get(remaining);
-      if (pad && pos) {
-        this.holds.set(remaining, {
-          padId: pad.id, offX: pad.x - pos.x, offY: pad.y - pos.y,
-        });
-      }
-      this.resize = null;
-    }
-    this.holds.delete(hand);
-    if (this.dragNew && this.dragNew.hand === hand) this.dragNew = null;
-    this.lastPos.delete(hand);
+  /** Scroll wheel resizes the pad under the cursor (or the one being dragged). */
+  wheel(x, y, deltaY) {
+    this.cursor = { x, y };
+    const pad = this.hold ? this.kitStore.getPad(this.hold.padId) : this._padAt(x, y);
+    if (!pad || deltaY === 0) return;
+    const f = this.config.wheelResizeFactor;
+    this.kitStore.resizePad(pad.id, deltaY < 0 ? pad.r * f : pad.r / f);
   }
 
-  /** Drop every in-flight gesture (used when leaving Edit mode). Pads keep
-   *  whatever position/size the gestures already applied. */
+  /** Drop any in-flight drag (used when leaving Edit mode). Pads keep
+   *  whatever position the drag already applied. */
   cancelAll() {
-    this.holds.clear();
-    this.resize = null;
+    this.hold = null;
     this.dragNew = null;
   }
 
   /** Snapshot for the renderer. */
   getState() {
-    const heldPadIds = [...this.holds.values()].map((h) => h.padId);
-    if (this.resize) heldPadIds.push(this.resize.padId);
-    const deleteActive = this.holds.size > 0;
-    const deleteHover = deleteActive && [...this.holds.keys()].some((hand) => {
-      const p = this.lastPos.get(hand);
-      return p && pointInRect(p.x, p.y, DELETE_BUTTON);
-    });
+    const hoverPad = (!this.hold && !this.dragNew)
+      ? this._padAt(this.cursor.x, this.cursor.y) : null;
+    const deleteActive = this.hold !== null;
     return {
       selectedInstrument: this.selectedInstrument,
-      dragNew: this.dragNew
-        ? { instrument: this.dragNew.instrument, variation: this.dragNew.variation,
-            x: this.dragNew.x, y: this.dragNew.y }
-        : null,
-      heldPadIds,
-      resizingPadId: this.resize ? this.resize.padId : null,
+      dragNew: this.dragNew ? { ...this.dragNew } : null,
+      heldPadId: this.hold ? this.hold.padId : null,
+      hoverPadId: hoverPad ? hoverPad.id : null,
       deleteActive,
-      deleteHover,
+      deleteHover: deleteActive && pointInRect(this.cursor.x, this.cursor.y, DELETE_BUTTON),
     };
   }
 }

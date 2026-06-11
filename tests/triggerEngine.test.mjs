@@ -9,6 +9,7 @@ const cfg = {
   strikeSpeedMin: 1,
   strikeSpeedMax: 5,
   velocityFloor: 0.25,
+  exitHysteresis: 1.15,
   keyboardKickVelocity: 0.85,
 };
 
@@ -105,12 +106,56 @@ test('two strikers act independently', () => {
   assert.equal(hits.length, 2);
 });
 
-test('overlapping pads both fire from one strike', () => {
+test('one strike fires exactly one pad: the nearest entered (overlap case)', () => {
   const { engine, hits } = makeEngine();
   const padB = { ...PAD, id: 'p2', instrument: 'tom-high', x: 0.55 };
+  // Endpoint (0.52, 0.5) is inside both pads; p1's center is nearer.
   engine.update([striker(0.30, 0.5, 3, 0)], [PAD, padB], 1);
   engine.update([striker(0.52, 0.5, 3, 0)], [PAD, padB], 1);
-  assert.deepEqual(hits.map((h) => h.padId).sort(), ['p1', 'p2']);
+  assert.deepEqual(hits.map((h) => h.padId), ['p1']);
+  // The silently-entered overlap pad is disarmed too: it can't fire until
+  // after an exit, then it fires when the strike lands nearer to it.
+  engine.update([striker(0.80, 0.5, 3, 0)], [PAD, padB], 1);  // exit both
+  engine.update([striker(0.57, 0.5, -3, 0)], [PAD, padB], 1); // nearer p2
+  assert.deepEqual(hits.map((h) => h.padId), ['p1', 'p2']);
+});
+
+test('a strike passing over one pad into another fires only where it lands', () => {
+  const { engine, hits } = makeEngine();
+  const padA = { id: 'pa', instrument: 'tom-mid', variation: 'a', x: 0.5, y: 0.3, r: 0.1 };
+  const padB = { id: 'pb', instrument: 'tom-floor', variation: 'a', x: 0.5, y: 0.7, r: 0.1 };
+  // Downward strike: starts above A, ends inside B — the segment fully
+  // crosses A on the way. Only B (where the strike lands) may fire.
+  engine.update([striker(0.5, 0.10, 0, 6)], [padA, padB], 1);
+  engine.update([striker(0.5, 0.65, 0, 6)], [padA, padB], 1);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].padId, 'pb');
+});
+
+test('pure pass-through with no landing pad fires the crossed pad nearest the endpoint', () => {
+  const { engine, hits } = makeEngine();
+  const padA = { id: 'pa', instrument: 'tom-mid', variation: 'a', x: 0.5, y: 0.3, r: 0.1 };
+  const padB = { id: 'pb', instrument: 'tom-floor', variation: 'a', x: 0.5, y: 0.6, r: 0.1 };
+  // Crosses both pads, ends inside neither; B is nearer the endpoint.
+  engine.update([striker(0.5, 0.10, 0, 8)], [padA, padB], 1);
+  engine.update([striker(0.5, 0.85, 0, 8)], [padA, padB], 1);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].padId, 'pb');
+});
+
+test('edge jitter within the exit hysteresis band cannot re-arm and double-fire', () => {
+  const { engine, hits } = makeEngine();
+  engine.update([striker(0.30, 0.5, 3, 0)], [PAD], 1);
+  engine.update([striker(0.48, 0.5, 3, 0)], [PAD], 1); // hit 1
+  // Jitter just past the rim (0.108 > r=0.1, but < r*1.15=0.115)...
+  engine.update([striker(0.608, 0.5, 3, 0)], [PAD], 1);
+  // ...and fast back in: still "inside", must not fire again.
+  engine.update([striker(0.52, 0.5, -3, 0)], [PAD], 1);
+  assert.equal(hits.length, 1);
+  // A real exit (beyond the hysteresis band) re-arms.
+  engine.update([striker(0.65, 0.5, 3, 0)], [PAD], 1);
+  engine.update([striker(0.52, 0.5, -3, 0)], [PAD], 1);
+  assert.equal(hits.length, 2);
 });
 
 test('fast pass-through within a single frame still registers (low fps)', () => {

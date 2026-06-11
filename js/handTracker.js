@@ -1,9 +1,17 @@
 // HandTracker: wraps MediaPipe HandLandmarker + getUserMedia. Hides camera
-// setup, landmark smoothing, velocity computation, and pinch hysteresis.
-// Emits, per processed video frame, one striker state per detected hand:
-//   { id, x, y, vx, vy, isPinching, pinchX, pinchY }
-// (mirrored coordinates: what the user sees on screen), plus pinch edge
-// events and hand-lost events.
+// setup, landmark filtering, velocity computation, and latency compensation.
+// Emits, per processed camera frame, one striker per detected hand:
+//   { id, x, y, vx, vy }
+// in mirrored coordinates (what the user sees on screen).
+//
+// Filtering: One Euro filter per axis — heavy smoothing at rest (stable dots),
+// minimal lag during fast strikes (accurate hits). The emitted position is
+// additionally extrapolated forward along the velocity by latencyCompMs to
+// compensate camera + inference delay, so hits land where the finger IS, not
+// where it was.
+//
+// Frames are processed via requestVideoFrameCallback when available (fires
+// exactly once per camera frame, ahead of rAF), falling back to rAF polling.
 
 const TASKS_VISION_VERSION = '0.10.35';
 const WASM_BASE =
@@ -12,30 +20,52 @@ const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 const INDEX_TIP = 8;
-const THUMB_TIP = 4;
+
+class OneEuro {
+  constructor({ minCutoff, beta, dCutoff }) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.xHat = null;
+    this.dxHat = 0;
+  }
+
+  static _alpha(cutoff, dt) {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  }
+
+  /** Returns [filteredValue, filteredDerivative(units/sec)]. */
+  filter(x, dt) {
+    if (this.xHat === null || dt <= 0) {
+      this.xHat = x;
+      return [x, 0];
+    }
+    const dx = (x - this.xHat) / dt;
+    const aD = OneEuro._alpha(this.dCutoff, dt);
+    this.dxHat = this.dxHat + aD * (dx - this.dxHat);
+    const cutoff = this.minCutoff + this.beta * Math.abs(this.dxHat);
+    const a = OneEuro._alpha(cutoff, dt);
+    this.xHat = this.xHat + a * (x - this.xHat);
+    return [this.xHat, this.dxHat];
+  }
+}
 
 export class HandTracker {
   /**
    * @param {object} opts
    * @param {HTMLVideoElement} opts.video
    * @param {object} opts.config
-   * @param {(strikers: Array) => void} opts.onFrame
-   * @param {(hand: string, x: number, y: number) => void} [opts.onPinchStart]
-   * @param {(hand: string, x: number, y: number) => void} [opts.onPinchMove]
-   * @param {(hand: string, x: number, y: number) => void} [opts.onPinchEnd]
-   * @param {(hand: string) => void} [opts.onHandLost]
+   * @param {(strikers: Array<{id:string,x:number,y:number,vx:number,vy:number}>) => void} opts.onFrame
    */
-  constructor({ video, config, onFrame, onPinchStart, onPinchMove, onPinchEnd, onHandLost }) {
+  constructor({ video, config, onFrame }) {
     this.video = video;
     this.config = config;
     this.onFrame = onFrame;
-    this.onPinchStart = onPinchStart;
-    this.onPinchMove = onPinchMove;
-    this.onPinchEnd = onPinchEnd;
-    this.onHandLost = onHandLost;
     this.landmarker = null;
-    this.hands = new Map(); // id -> { x, y, vx, vy, t, isPinching }
+    this.hands = new Map(); // id -> { fx: OneEuro, fy: OneEuro, t }
     this._lastVideoTime = -1;
+    this._running = false;
     this.aspect = 16 / 9;
   }
 
@@ -49,6 +79,9 @@ export class HandTracker {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
       runningMode: 'VIDEO',
       numHands: 2,
+      minHandDetectionConfidence: this.config.minHandDetectionConfidence,
+      minHandPresenceConfidence: this.config.minHandPresenceConfidence,
+      minTrackingConfidence: this.config.minTrackingConfidence,
     });
 
     let stream;
@@ -75,15 +108,38 @@ export class HandTracker {
     this.aspect = this.video.videoWidth / this.video.videoHeight || 16 / 9;
   }
 
-  /** Call every animation frame; processes the video frame if it's new. */
-  poll(nowMs) {
-    if (!this.landmarker || this.video.readyState < 2) return;
-    if (this.video.currentTime === this._lastVideoTime) return;
-    this._lastVideoTime = this.video.currentTime;
+  /** Begin processing camera frames (one detection per camera frame). */
+  start() {
+    if (this._running || !this.landmarker) return;
+    this._running = true;
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+      const loop = (now) => {
+        if (!this._running) return;
+        this._process(now);
+        this.video.requestVideoFrameCallback(loop);
+      };
+      this.video.requestVideoFrameCallback(loop);
+    } else {
+      const loop = (now) => {
+        if (!this._running) return;
+        if (this.video.currentTime !== this._lastVideoTime) {
+          this._lastVideoTime = this.video.currentTime;
+          this._process(now);
+        }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    }
+  }
 
+  stop() { this._running = false; }
+
+  _process(nowMs) {
+    if (this.video.readyState < 2) return;
     const result = this.landmarker.detectForVideo(this.video, nowMs);
     const seen = new Set();
     const strikers = [];
+    const lead = this.config.latencyCompMs / 1000;
 
     for (let i = 0; i < result.landmarks.length; i++) {
       const lm = result.landmarks[i];
@@ -95,50 +151,36 @@ export class HandTracker {
       // Mirror x so coordinates match what the user sees on screen.
       const rawX = 1 - lm[INDEX_TIP].x;
       const rawY = lm[INDEX_TIP].y;
-      const thumbX = 1 - lm[THUMB_TIP].x;
-      const thumbY = lm[THUMB_TIP].y;
 
-      const prev = this.hands.get(id);
-      const a = this.config.positionAlpha;
-      const x = prev ? prev.x + a * (rawX - prev.x) : rawX;
-      const y = prev ? prev.y + a * (rawY - prev.y) : rawY;
-
-      let vx = 0, vy = 0;
-      if (prev) {
-        const dt = (nowMs - prev.t) / 1000;
-        if (dt > 0) {
-          const va = this.config.velocityAlpha;
-          vx = prev.vx + va * ((x - prev.x) / dt - prev.vx);
-          vy = prev.vy + va * ((y - prev.y) / dt - prev.vy);
-        } else {
-          vx = prev.vx; vy = prev.vy;
-        }
+      let hand = this.hands.get(id);
+      if (!hand) {
+        hand = {
+          fx: new OneEuro({
+            minCutoff: this.config.oneEuroMinCutoff,
+            beta: this.config.oneEuroBeta,
+            dCutoff: this.config.oneEuroDCutoff,
+          }),
+          fy: new OneEuro({
+            minCutoff: this.config.oneEuroMinCutoff,
+            beta: this.config.oneEuroBeta,
+            dCutoff: this.config.oneEuroDCutoff,
+          }),
+          t: nowMs,
+        };
+        this.hands.set(id, hand);
       }
+      const dt = (nowMs - hand.t) / 1000;
+      hand.t = nowMs;
+      const [x, vx] = hand.fx.filter(rawX, dt);
+      const [y, vy] = hand.fy.filter(rawY, dt);
 
-      // Pinch with hysteresis (aspect-corrected thumb-to-index distance).
-      const pinchDist = Math.hypot((thumbX - x) * this.aspect, thumbY - y);
-      const wasPinching = prev ? prev.isPinching : false;
-      const isPinching = wasPinching
-        ? pinchDist < this.config.pinchOffDistance
-        : pinchDist < this.config.pinchOnDistance;
-      const pinchX = (x + thumbX) / 2;
-      const pinchY = (y + thumbY) / 2;
-
-      this.hands.set(id, { x, y, vx, vy, t: nowMs, isPinching });
-      strikers.push({ id, x, y, vx, vy, isPinching, pinchX, pinchY });
-
-      if (isPinching && !wasPinching && this.onPinchStart) this.onPinchStart(id, pinchX, pinchY);
-      else if (isPinching && wasPinching && this.onPinchMove) this.onPinchMove(id, pinchX, pinchY);
-      else if (!isPinching && wasPinching && this.onPinchEnd) this.onPinchEnd(id, pinchX, pinchY);
+      // Latency compensation: report where the finger is now, not where the
+      // camera saw it. The same point is rendered, so sight and sound agree.
+      strikers.push({ id, x: x + vx * lead, y: y + vy * lead, vx, vy });
     }
 
     for (const id of [...this.hands.keys()]) {
-      if (!seen.has(id)) {
-        const wasPinching = this.hands.get(id).isPinching;
-        this.hands.delete(id);
-        if (wasPinching && this.onHandLost) this.onHandLost(id);
-        else if (this.onHandLost) this.onHandLost(id);
-      }
+      if (!seen.has(id)) this.hands.delete(id);
     }
 
     this.onFrame(strikers);
