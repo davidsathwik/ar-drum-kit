@@ -127,12 +127,14 @@ function frame(now) {
 
 async function start() {
   startBtn.disabled = true;
+  // Synchronously, inside the tap: iOS Safari only grants audio to the
+  // gesture itself, so the context must start before any await.
+  audio.unlock();
   try {
     startStatus.textContent = 'Loading drum samples…';
     await audio.init((done, total) => {
       startStatus.textContent = `Loading drum samples… ${done}/${total}`;
     });
-    await audio.resume();
 
     // ?nocam skips the camera (debug / no-webcam preview of the kit).
     if (!new URLSearchParams(location.search).has('nocam')) {

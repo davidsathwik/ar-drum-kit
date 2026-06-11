@@ -12,14 +12,31 @@ export class AudioEngine {
     this.master = null;
   }
 
-  /** Fetch and decode every sample. Call once at startup. */
+  /**
+   * Create the context and start it INSIDE the user gesture, before any
+   * await. iOS Safari ties audio permission to the gesture itself: resuming
+   * after seconds of sample loading is too late and the kit stays mute.
+   */
+  unlock() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)({
+        latencyHint: 'interactive',
+      });
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.9;
+      this.master.connect(this.ctx.destination);
+    }
+    if (this.ctx.state !== 'running') this.ctx.resume();
+    // Play one silent sample now — the canonical iOS in-gesture unlock.
+    const tick = this.ctx.createBufferSource();
+    tick.buffer = this.ctx.createBuffer(1, 1, 22050);
+    tick.connect(this.ctx.destination);
+    tick.start(0);
+  }
+
+  /** Fetch and decode every sample. Call once at startup, after unlock(). */
   async init(onProgress) {
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)({
-      latencyHint: 'interactive',
-    });
-    this.master = this.ctx.createGain();
-    this.master.gain.value = 0.9;
-    this.master.connect(this.ctx.destination);
+    this.unlock();
 
     const jobs = [];
     for (const [instrument, def] of Object.entries(this.manifest)) {

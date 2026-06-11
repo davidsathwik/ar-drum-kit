@@ -122,14 +122,21 @@ export class HandTracker {
       `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/vision_bundle.mjs`
     );
     const fileset = await vision.FilesetResolver.forVisionTasks(WASM_BASE);
-    this.landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+    const make = (delegate) => vision.HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
       runningMode: 'VIDEO',
       numHands: 2,
       minHandDetectionConfidence: this.config.minHandDetectionConfidence,
       minHandPresenceConfidence: this.config.minHandPresenceConfidence,
       minTrackingConfidence: this.config.minTrackingConfidence,
     });
+    try {
+      this.landmarker = await make('GPU');
+    } catch (err) {
+      // Some browsers (notably iOS Safari) reject the GPU delegate.
+      console.warn('GPU delegate unavailable, falling back to CPU:', err);
+      this.landmarker = await make('CPU');
+    }
 
     let stream;
     try {

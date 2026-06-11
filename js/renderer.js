@@ -7,6 +7,20 @@ import {
   dropdownItems, trayItems, DELETE_BUTTON, NEW_PAD_RADIUS,
 } from './editLayout.js';
 
+// ctx.roundRect is missing on iOS Safari < 16.4.
+if (typeof CanvasRenderingContext2D !== 'undefined' &&
+    !CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r);
+    this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r);
+    this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+  };
+}
+
 const HUES = {
   'kick': 16, 'snare': 200, 'hihat-closed': 48, 'hihat-open': 40,
   'tom-high': 280, 'tom-mid': 300, 'tom-floor': 320,
