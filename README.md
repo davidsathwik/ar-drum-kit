@@ -22,8 +22,9 @@ load from CDN, so the first launch needs internet.
 ## Playing
 
 - Strike any pad with your **index fingertip** — entry from any direction
-  counts; speed controls loudness. Slow, gentle movements through a pad don't
-  trigger it, so you can reposition between phrases silently.
+  counts, no hard downward swing needed: any deliberate movement into a pad
+  fires it, and speed controls loudness. Only a near-stationary hand drifting
+  in stays silent.
 - One strike fires one pad — the pad where the strike lands, not the pads it
   passes over on the way.
 - A pad re-arms only after your fingertip leaves it (no machine-gunning).

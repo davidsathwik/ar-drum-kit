@@ -5,14 +5,17 @@
 export const config = {
   // --- Hit model ---
   // Minimum entry speed (aspect-corrected normalized units / second) for a
-  // strike to trigger. Slow drifts through a pad stay silent. Tuned for
-  // cameras tracking as low as ~15fps; lower further if strikes still miss.
-  strikeSpeedMin: 0.55,
+  // strike to trigger. Near-presence tuning: ANY deliberate movement into a
+  // pad fires, from any direction — no hard downward swing needed. The floor
+  // exists only so tracking jitter on a stationary hand can't ghost-fire
+  // (resting inside a pad stays silent; re-arm on exit still applies).
+  strikeSpeedMin: 0.18,
   // Entry speed mapped to full velocity (1.0). Between min and max, velocity
   // scales linearly.
-  strikeSpeedMax: 3.5,
-  // Loudness floor for the softest triggering hit, so threshold hits are audible.
-  velocityFloor: 0.35,
+  strikeSpeedMax: 3.0,
+  // Loudness floor for the softest triggering hit, so gentle taps are
+  // clearly audible, not whispers.
+  velocityFloor: 0.45,
   // A striker counts as "exited" (re-armed) only beyond radius * this factor,
   // so jitter at the pad edge can't re-arm and double-fire.
   exitHysteresis: 1.15,
