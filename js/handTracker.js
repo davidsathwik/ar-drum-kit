@@ -55,32 +55,46 @@ class OneEuro {
 }
 
 /**
- * Per-axis fingertip filter: One Euro position + responsive velocity EMA.
+ * Per-axis fingertip filter: One Euro position + velocity estimation.
  * Pure math — exported for tests.
+ *
+ * Velocity smoothing uses a wall-clock time constant (velocityTauMs), so it
+ * converges in the same real time regardless of camera framerate. The raw
+ * per-frame velocity is also returned (vInst): at low fps an entire strike
+ * can be one inter-frame jump, and any smoothing would dilute it.
  */
 export class AxisFilter {
   constructor(config) {
+    this.config = config;
+    this.tau = config.velocityTauMs / 1000;
+    this.euro = null;
+    this.reset();
+  }
+
+  /** Forget all history (tracking reacquired after a gap). */
+  reset() {
     this.euro = new OneEuro({
-      minCutoff: config.oneEuroMinCutoff,
-      beta: config.oneEuroBeta,
-      dCutoff: config.oneEuroDCutoff,
+      minCutoff: this.config.oneEuroMinCutoff,
+      beta: this.config.oneEuroBeta,
+      dCutoff: this.config.oneEuroDCutoff,
     });
-    this.velocityAlpha = config.velocityAlpha;
     this.prevX = null;
     this.v = 0;
   }
 
-  /** @returns {{x: number, v: number}} filtered position and units/sec velocity */
+  /** @returns {{x: number, v: number, vInst: number}} filtered position,
+   *  smoothed velocity, and raw per-frame velocity (units/sec). */
   update(raw, dt) {
     const x = this.euro.filter(raw, dt);
     if (this.prevX === null || dt <= 0) {
       this.prevX = x;
-      return { x, v: 0 };
+      return { x, v: 0, vInst: 0 };
     }
-    const dv = (x - this.prevX) / dt;
-    this.v = this.v + this.velocityAlpha * (dv - this.v);
+    const vInst = (x - this.prevX) / dt;
+    const alpha = 1 - Math.exp(-dt / this.tau);
+    this.v = this.v + alpha * (vInst - this.v);
     this.prevX = x;
-    return { x, v: this.v };
+    return { x, v: this.v, vInst };
   }
 }
 
@@ -202,14 +216,26 @@ export class HandTracker {
         };
         this.hands.set(id, hand);
       }
-      const dt = (nowMs - hand.t) / 1000;
+      let dt = (nowMs - hand.t) / 1000;
       hand.t = nowMs;
-      const { x, v: vx } = hand.fx.update(rawX, dt);
-      const { x: y, v: vy } = hand.fy.update(rawY, dt);
+      // A long gap means tracking dropped out: restart the filters so the
+      // jump to the reacquired position can't read as a monster strike.
+      if (dt * 1000 > this.config.trackingGapResetMs) {
+        hand.fx.reset();
+        hand.fy.reset();
+        dt = 0;
+      }
+      const { x, v: vx, vInst: vix } = hand.fx.update(rawX, dt);
+      const { x: y, v: vy, vInst: viy } = hand.fy.update(rawY, dt);
 
       // Latency compensation: report where the finger is now, not where the
-      // camera saw it. The same point is rendered, so sight and sound agree.
-      strikers.push({ id, x: x + vx * lead, y: y + vy * lead, vx, vy });
+      // camera saw it (slower cameras lag more, so part of the lead scales
+      // with the frame interval). The same point is rendered, so sight and
+      // sound agree.
+      const handLead = lead + this.config.latencyCompFrameFraction * dt;
+      strikers.push({
+        id, x: x + vx * handLead, y: y + vy * handLead, vx, vy, vix, viy,
+      });
     }
 
     for (const id of [...this.hands.keys()]) {

@@ -60,6 +60,46 @@ test('hand at rest with sensor jitter stays calm', () => {
 
 test('first sample after tracking acquisition reports zero velocity', () => {
   const f = new AxisFilter(config);
-  const { v } = f.update(0.9, 0);
+  const { v, vInst } = f.update(0.9, 0);
   assert.equal(v, 0);
+  assert.equal(vInst, 0);
+});
+
+test('low fps (15): a strike completed in a single frame still reads fast', () => {
+  // At 15fps one camera frame can contain the whole strike. The raw
+  // per-frame velocity (vInst) must carry it, and the time-based smoothing
+  // must converge in wall-clock time, not frame count.
+  const dt = 1 / 15;
+  const f = new AxisFilter(config);
+  f.update(0.5, 0);
+  const { v, vInst } = f.update(0.5 + 3 * dt, dt); // 3 units/sec jump
+  assert.ok(vInst >= config.strikeSpeedMin,
+    `single-frame vInst ${vInst.toFixed(2)} must clear strikeSpeedMin`);
+  assert.ok(Math.max(v, vInst) > 3 * 0.5,
+    `trigger speed must reach half of true speed in one slow frame, got ${Math.max(v, vInst).toFixed(2)}`);
+});
+
+test('velocity smoothing is framerate-independent (same wall-clock convergence)', () => {
+  // 100ms of constant 3 u/s motion sampled at 30fps vs 15fps must land on
+  // similar smoothed velocities.
+  const sample = (fps) => {
+    const dt = 1 / fps, f = new AxisFilter(config);
+    f.update(0, 0);
+    let out;
+    for (let i = 1; i <= Math.round(0.1 * fps); i++) out = f.update(3 * dt * i, dt);
+    return out.v;
+  };
+  const v30 = sample(30), v15 = sample(15);
+  assert.ok(Math.abs(v30 - v15) < 0.8,
+    `30fps (${v30.toFixed(2)}) and 15fps (${v15.toFixed(2)}) should converge similarly`);
+});
+
+test('reset() forgets history so reacquisition cannot fake a strike', () => {
+  const f = new AxisFilter(config);
+  f.update(0.1, 0);
+  f.update(0.1 + 3 / 30, 1 / 30); // moving fast
+  f.reset();
+  const { v, vInst } = f.update(0.9, 0); // reappears far away
+  assert.equal(v, 0);
+  assert.equal(vInst, 0);
 });

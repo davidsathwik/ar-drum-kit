@@ -70,8 +70,12 @@ export class TriggerEngine {
 
   /**
    * Per-frame update.
-   * @param {Array<{id: string, x: number, y: number, vx: number, vy: number}>} strikers
-   *   vx/vy in normalized units/second (not aspect-corrected).
+   * @param {Array<{id: string, x: number, y: number, vx: number, vy: number,
+   *               vix?: number, viy?: number}>} strikers
+   *   vx/vy smoothed, vix/viy raw per-frame velocity, in normalized
+   *   units/second (not aspect-corrected). The strike speed is the larger of
+   *   the two: at low camera framerates an entire strike can be a single
+   *   inter-frame jump that smoothing would dilute.
    * @param {Array<{id: string, instrument: string, variation: string,
    *               x: number, y: number, r: number}>} pads
    * @param {number} aspect - frame width / height
@@ -84,7 +88,9 @@ export class TriggerEngine {
       seen.add(s.id);
       const ax = s.x * aspect, ay = s.y;
       const prev = this._prevPos.get(s.id);
-      const speed = Math.hypot(s.vx * aspect, s.vy);
+      const speed = Math.max(
+        Math.hypot(s.vx * aspect, s.vy),
+        Math.hypot((s.vix ?? 0) * aspect, s.viy ?? 0));
 
       // Collect every pad this striker entered or crossed this frame.
       const candidates = [];

@@ -5,12 +5,12 @@
 export const config = {
   // --- Hit model ---
   // Minimum entry speed (aspect-corrected normalized units / second) for a
-  // strike to trigger. Slow drifts through a pad stay silent. If a machine
-  // tracks well below 30fps and fast strikes are missed, lower this.
-  strikeSpeedMin: 0.7,
+  // strike to trigger. Slow drifts through a pad stay silent. Tuned for
+  // cameras tracking as low as ~15fps; lower further if strikes still miss.
+  strikeSpeedMin: 0.55,
   // Entry speed mapped to full velocity (1.0). Between min and max, velocity
   // scales linearly.
-  strikeSpeedMax: 4.0,
+  strikeSpeedMax: 3.5,
   // Loudness floor for the softest triggering hit, so threshold hits are audible.
   velocityFloor: 0.35,
   // A striker counts as "exited" (re-armed) only beyond radius * this factor,
@@ -21,12 +21,19 @@ export const config = {
   oneEuroMinCutoff: 1.5,  // Hz; lower = smoother when still
   oneEuroBeta: 2.5,       // higher = less lag during fast strikes
   oneEuroDCutoff: 1.5,    // adaptation-derivative smoothing cutoff
-  // Strike-speed estimator: EMA weight per frame on the filtered-position
-  // derivative. High = tracks fast strikes within a frame or two.
-  velocityAlpha: 0.6,
+  // Strike-speed smoothing time constant, in wall-clock ms — framerate
+  // independent, so a 15fps camera converges in the same real time as 30fps.
+  // (The trigger additionally uses the raw per-frame speed, whichever is
+  // larger, so a strike completed within a single slow frame still counts.)
+  velocityTauMs: 18,
   // Hit-test (and display) position is extrapolated forward along the
-  // velocity by this much, compensating camera + inference latency.
-  latencyCompMs: 35,
+  // velocity: a fixed lead for inference latency plus a fraction of the
+  // measured frame interval (slower cameras lag more).
+  latencyCompMs: 30,
+  latencyCompFrameFraction: 0.5,
+  // A tracking gap longer than this resets a hand's filters: a dropout must
+  // reacquire silently instead of fabricating a huge displacement.
+  trackingGapResetMs: 250,
 
   // --- MediaPipe confidence thresholds ---
   minHandDetectionConfidence: 0.6,

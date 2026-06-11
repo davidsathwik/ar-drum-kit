@@ -236,6 +236,17 @@ test('keyboard kick still sounds with no kick pad in the layout', () => {
   assert.equal(hits[0].instrument, 'kick');
 });
 
+test('a single-frame strike fires on raw per-frame speed (low fps)', () => {
+  // The smoothed velocity (vx) hasn't caught up, but the instantaneous
+  // inter-frame velocity (vix) carries the strike: it must fire.
+  const { engine, hits } = makeEngine();
+  engine.update([{ id: 'right', x: 0.30, y: 0.5, vx: 0.2, vy: 0, vix: 0, viy: 0 }], [PAD], 1);
+  engine.update([{ id: 'right', x: 0.48, y: 0.5, vx: 0.2, vy: 0, vix: 5, viy: 0 }], [PAD], 1);
+  assert.equal(hits.length, 1);
+  // And the louder of the two estimates sets the loudness.
+  assert.equal(hits[0].velocity, velocityForSpeed(5, cfg));
+});
+
 test('muted engine emits nothing (Edit mode)', () => {
   const { engine, hits } = makeEngine();
   engine.setMuted(true);
