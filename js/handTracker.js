@@ -4,11 +4,15 @@
 //   { id, x, y, vx, vy }
 // in mirrored coordinates (what the user sees on screen).
 //
-// Filtering: One Euro filter per axis — heavy smoothing at rest (stable dots),
-// minimal lag during fast strikes (accurate hits). The emitted position is
-// additionally extrapolated forward along the velocity by latencyCompMs to
-// compensate camera + inference delay, so hits land where the finger IS, not
-// where it was.
+// Filtering (AxisFilter, one per axis per hand):
+//  - Position: One Euro filter — heavy smoothing at rest (stable dots),
+//    minimal lag during fast strikes (accurate hits).
+//  - Strike velocity: EMA over the filtered-position derivative, weighted to
+//    reach true speed within a frame or two — this is what the TriggerEngine
+//    compares against the strike threshold, so it must not lag.
+// The emitted position is extrapolated forward along the velocity by
+// latencyCompMs to compensate camera + inference delay, so hits land where
+// the finger IS, not where it was.
 //
 // Frames are processed via requestVideoFrameCallback when available (fires
 // exactly once per camera frame, ahead of rAF), falling back to rAF polling.
@@ -35,11 +39,10 @@ class OneEuro {
     return 1 / (1 + tau / dt);
   }
 
-  /** Returns [filteredValue, filteredDerivative(units/sec)]. */
   filter(x, dt) {
     if (this.xHat === null || dt <= 0) {
       this.xHat = x;
-      return [x, 0];
+      return x;
     }
     const dx = (x - this.xHat) / dt;
     const aD = OneEuro._alpha(this.dCutoff, dt);
@@ -47,7 +50,37 @@ class OneEuro {
     const cutoff = this.minCutoff + this.beta * Math.abs(this.dxHat);
     const a = OneEuro._alpha(cutoff, dt);
     this.xHat = this.xHat + a * (x - this.xHat);
-    return [this.xHat, this.dxHat];
+    return this.xHat;
+  }
+}
+
+/**
+ * Per-axis fingertip filter: One Euro position + responsive velocity EMA.
+ * Pure math — exported for tests.
+ */
+export class AxisFilter {
+  constructor(config) {
+    this.euro = new OneEuro({
+      minCutoff: config.oneEuroMinCutoff,
+      beta: config.oneEuroBeta,
+      dCutoff: config.oneEuroDCutoff,
+    });
+    this.velocityAlpha = config.velocityAlpha;
+    this.prevX = null;
+    this.v = 0;
+  }
+
+  /** @returns {{x: number, v: number}} filtered position and units/sec velocity */
+  update(raw, dt) {
+    const x = this.euro.filter(raw, dt);
+    if (this.prevX === null || dt <= 0) {
+      this.prevX = x;
+      return { x, v: 0 };
+    }
+    const dv = (x - this.prevX) / dt;
+    this.v = this.v + this.velocityAlpha * (dv - this.v);
+    this.prevX = x;
+    return { x, v: this.v };
   }
 }
 
@@ -63,7 +96,7 @@ export class HandTracker {
     this.config = config;
     this.onFrame = onFrame;
     this.landmarker = null;
-    this.hands = new Map(); // id -> { fx: OneEuro, fy: OneEuro, t }
+    this.hands = new Map(); // id -> { fx: AxisFilter, fy: AxisFilter, t }
     this._lastVideoTime = -1;
     this._running = false;
     this.aspect = 16 / 9;
@@ -112,10 +145,18 @@ export class HandTracker {
   start() {
     if (this._running || !this.landmarker) return;
     this._running = true;
+    // A single bad frame must never kill the loop (and with it, all sound).
+    const safeProcess = (now) => {
+      try {
+        this._process(now);
+      } catch (err) {
+        console.error('hand tracking frame failed:', err);
+      }
+    };
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
       const loop = (now) => {
         if (!this._running) return;
-        this._process(now);
+        safeProcess(now);
         this.video.requestVideoFrameCallback(loop);
       };
       this.video.requestVideoFrameCallback(loop);
@@ -124,7 +165,7 @@ export class HandTracker {
         if (!this._running) return;
         if (this.video.currentTime !== this._lastVideoTime) {
           this._lastVideoTime = this.video.currentTime;
-          this._process(now);
+          safeProcess(now);
         }
         requestAnimationFrame(loop);
       };
@@ -155,24 +196,16 @@ export class HandTracker {
       let hand = this.hands.get(id);
       if (!hand) {
         hand = {
-          fx: new OneEuro({
-            minCutoff: this.config.oneEuroMinCutoff,
-            beta: this.config.oneEuroBeta,
-            dCutoff: this.config.oneEuroDCutoff,
-          }),
-          fy: new OneEuro({
-            minCutoff: this.config.oneEuroMinCutoff,
-            beta: this.config.oneEuroBeta,
-            dCutoff: this.config.oneEuroDCutoff,
-          }),
+          fx: new AxisFilter(this.config),
+          fy: new AxisFilter(this.config),
           t: nowMs,
         };
         this.hands.set(id, hand);
       }
       const dt = (nowMs - hand.t) / 1000;
       hand.t = nowMs;
-      const [x, vx] = hand.fx.filter(rawX, dt);
-      const [y, vy] = hand.fy.filter(rawY, dt);
+      const { x, v: vx } = hand.fx.update(rawX, dt);
+      const { x: y, v: vy } = hand.fy.update(rawY, dt);
 
       // Latency compensation: report where the finger is now, not where the
       // camera saw it. The same point is rendered, so sight and sound agree.

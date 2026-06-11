@@ -45,6 +45,9 @@ export class AudioEngine {
 
   play(instrument, variation, velocity) {
     if (!this.ctx) return;
+    // Browsers can (re)suspend the context behind our back (tab switches,
+    // autoplay policy); a hit is a fine moment to claw it back.
+    if (this.ctx.state === 'suspended') this.ctx.resume();
     let key = instrument + '/' + (variation ?? '');
     let buffer = this.buffers.get(key);
     if (!buffer) {
@@ -66,7 +69,7 @@ export class AudioEngine {
 
     const gain = this.ctx.createGain();
     // Perceptual-ish curve: soft hits noticeably quieter, hard hits full.
-    gain.gain.value = Math.pow(Math.max(0, Math.min(1, velocity)), 1.6);
+    gain.gain.value = Math.pow(Math.max(0, Math.min(1, velocity)), this.config.gainExponent);
 
     src.connect(filter);
     filter.connect(gain);

@@ -12,15 +12,18 @@ export const config = {
   // scales linearly.
   strikeSpeedMax: 4.0,
   // Loudness floor for the softest triggering hit, so threshold hits are audible.
-  velocityFloor: 0.25,
+  velocityFloor: 0.35,
   // A striker counts as "exited" (re-armed) only beyond radius * this factor,
   // so jitter at the pad edge can't re-arm and double-fire.
   exitHysteresis: 1.15,
 
   // --- Tracking filter (One Euro: smooth at rest, responsive in motion) ---
-  oneEuroMinCutoff: 1.2,  // Hz; lower = smoother when still
-  oneEuroBeta: 0.7,       // higher = less lag during fast strikes
-  oneEuroDCutoff: 1.0,    // derivative smoothing cutoff
+  oneEuroMinCutoff: 1.5,  // Hz; lower = smoother when still
+  oneEuroBeta: 2.5,       // higher = less lag during fast strikes
+  oneEuroDCutoff: 1.5,    // adaptation-derivative smoothing cutoff
+  // Strike-speed estimator: EMA weight per frame on the filtered-position
+  // derivative. High = tracks fast strikes within a frame or two.
+  velocityAlpha: 0.6,
   // Hit-test (and display) position is extrapolated forward along the
   // velocity by this much, compensating camera + inference latency.
   latencyCompMs: 35,
@@ -30,7 +33,8 @@ export const config = {
   minHandPresenceConfidence: 0.6,
   minTrackingConfidence: 0.6,
 
-  // --- Audio humanization ---
+  // --- Audio ---
+  gainExponent: 1.3,       // velocity -> gain curve (1 = linear)
   pitchJitter: 0.04,       // +/- playbackRate variation per hit
   filterBaseHz: 9000,      // lowpass center for humanization
   filterJitterHz: 3000,    // +/- cutoff variation per hit
